@@ -16,6 +16,18 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Fungsi untuk menjalankan docker compose (support versi lama & baru)
+docker_compose_cmd() {
+    if command_exists docker-compose; then
+        docker-compose "$@"
+    elif docker compose version >/dev/null 2>&1; then
+        docker compose "$@"
+    else
+        echo -e "${RED}❌ Docker Compose tidak ditemukan!${NC}"
+        exit 1
+    fi
+}
+
 # 1. Cek Docker
 echo "📦 Mengecek Docker..."
 if ! command_exists docker; then
@@ -36,17 +48,17 @@ echo -e "${GREEN}✅ Docker Compose sudah terinstall${NC}"
 # 3. Stop container lama jika ada
 echo ""
 echo "🛑 Menghentikan container lama (jika ada)..."
-docker-compose down 2>/dev/null || true
+docker_compose_cmd down 2>/dev/null || true
 
 # 4. Build image
 echo ""
 echo "🔨 Building Docker image..."
-docker-compose build
+docker_compose_cmd build
 
 # 5. Start container
 echo ""
 echo "🚀 Menjalankan aplikasi..."
-docker-compose up -d
+docker_compose_cmd up -d
 
 # 6. Cek status
 echo ""
@@ -61,11 +73,17 @@ if docker ps | grep -q ikaral-repair-pro; then
     echo "   → http://$(hostname -I | awk '{print $1}'):8080"
     echo ""
     echo "🔧 Commands:"
-    echo "   → Lihat logs: docker-compose logs -f"
-    echo "   → Stop app: docker-compose down"
-    echo "   → Restart: docker-compose restart"
+    if command_exists docker-compose; then
+        echo "   → Lihat logs: docker-compose logs -f"
+        echo "   → Stop app: docker-compose down"
+        echo "   → Restart: docker-compose restart"
+    else
+        echo "   → Lihat logs: docker compose logs -f"
+        echo "   → Stop app: docker compose down"
+        echo "   → Restart: docker compose restart"
+    fi
     echo ""
 else
-    echo -e "${RED}❌ Deployment gagal! Cek logs dengan: docker-compose logs${NC}"
+    echo -e "${RED}❌ Deployment gagal! Cek logs dengan: docker compose logs${NC}"
     exit 1
 fi
