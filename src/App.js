@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Wrench, Smartphone, Users, TrendingUp, Search, Plus, Download, Eye, CheckCircle, Clock, AlertCircle } from 'lucide-react';
+import { Wrench, Smartphone, Search, Plus, Download, Eye, CheckCircle, Clock, AlertCircle, Settings, Brain } from 'lucide-react';
 import jsPDF from 'jspdf';
 
 const App = () => {
@@ -9,6 +9,27 @@ const App = () => {
   const [showAddRepair, setShowAddRepair] = useState(false);
   const [selectedRepair, setSelectedRepair] = useState(null);
 
+  // AI Configuration
+  const [aiProvider, setAiProvider] = useState('gemini');
+  const [apiKeys, setApiKeys] = useState({
+    gemini: '',
+    claude: '',
+    deepseek: ''
+  });
+  const [useAI, setUseAI] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+
+  // Load settings from localStorage
+  useEffect(() => {
+    const savedProvider = localStorage.getItem('ikaral_ai_provider');
+    const savedKeys = localStorage.getItem('ikaral_api_keys');
+    const savedUseAI = localStorage.getItem('ikaral_use_ai');
+
+    if (savedProvider) setAiProvider(savedProvider);
+    if (savedKeys) setApiKeys(JSON.parse(savedKeys));
+    if (savedUseAI) setUseAI(savedUseAI === 'true');
+  }, []);
+
   // Stats data
   const stats = {
     totalRepairs: repairs.length,
@@ -17,76 +38,140 @@ const App = () => {
     inProgressRepairs: repairs.filter(r => r.status === 'in-progress').length,
   };
 
-  // AI Diagnostic Function
-  const runAIDiagnostic = (deviceType, problem) => {
-    const diagnostics = {
-      smartphone: {
-        'tidak bisa nyala': {
-          cause: 'Kemungkinan masalah pada baterai atau IC power',
-          solution: 'Periksa baterai, konektor charging, dan IC power',
-          parts: ['Baterai', 'Konektor Charging', 'IC Power'],
-          estimatedCost: 150000,
-          estimatedTime: '2-3 hari'
-        },
-        'layar pecah': {
-          cause: 'LCD/touchscreen rusak akibat benturan',
-          solution: 'Ganti LCD dan touchscreen',
-          parts: ['LCD', 'Touchscreen'],
-          estimatedCost: 500000,
-          estimatedTime: '1 hari'
-        },
-        'baterai boros': {
-          cause: 'Baterai sudah melemah atau ada aplikasi yang boros',
-          solution: 'Ganti baterai atau optimasi software',
-          parts: ['Baterai'],
-          estimatedCost: 200000,
-          estimatedTime: '1 hari'
-        }
+  // AI Diagnostic Functions for each provider
+  const callGeminiAPI = async (prompt) => {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${apiKeys.gemini}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }]
+      })
+    });
+
+    if (!response.ok) throw new Error('Gemini API Error');
+    const data = await response.json();
+    return data.candidates[0].content.parts[0].text;
+  };
+
+  const callClaudeAPI = async (prompt) => {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKeys.claude,
+        'anthropic-version': '2023-06-01'
       },
-      laptop: {
-        'tidak bisa nyala': {
-          cause: 'Kemungkinan masalah pada RAM, HDD, atau motherboard',
-          solution: 'Periksa RAM, HDD/SSD, dan motherboard',
-          parts: ['RAM', 'HDD/SSD', 'Motherboard'],
-          estimatedCost: 300000,
-          estimatedTime: '3-5 hari'
-        },
-        'overheat': {
-          cause: 'Sistem pendingin tidak optimal atau thermal paste kering',
-          solution: 'Bersihkan fan, ganti thermal paste',
-          parts: ['Thermal Paste', 'Cooling Fan'],
-          estimatedCost: 150000,
-          estimatedTime: '1-2 hari'
-        }
-      }
-    };
+      body: JSON.stringify({
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
 
-    const problemLower = problem.toLowerCase();
-    const deviceDiag = diagnostics[deviceType] || diagnostics.smartphone;
+    if (!response.ok) throw new Error('Claude API Error');
+    const data = await response.json();
+    return data.content[0].text;
+  };
 
-    for (let key in deviceDiag) {
-      if (problemLower.includes(key)) {
-        return deviceDiag[key];
-      }
-    }
+  const callDeepSeekAPI = async (prompt) => {
+    const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKeys.deepseek}`
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
 
-    return {
-      cause: 'Perlu pemeriksaan lebih lanjut',
+    if (!response.ok) throw new Error('DeepSeek API Error');
+    const data = await response.json();
+    return data.choices[0].message.content;
+  };
+
+  // Main AI Diagnostic Function
+  const runAIDiagnostic = async (deviceType, deviceModel, problem) => {
+    // Fallback diagnostic if AI is disabled
+    const fallbackDiagnostic = {
+      cause: 'Perlu pemeriksaan lebih lanjut oleh teknisi',
       solution: 'Teknisi akan melakukan diagnosa mendetail',
       parts: ['Akan ditentukan setelah pemeriksaan'],
       estimatedCost: 100000,
-      estimatedTime: '1-3 hari'
+      estimatedTime: '1-3 hari',
+      riskLevel: 'Sedang'
     };
+
+    // If AI is disabled or no API key, return fallback
+    if (!useAI || !apiKeys[aiProvider]) {
+      return fallbackDiagnostic;
+    }
+
+    try {
+      const prompt = `
+Anda adalah teknisi ahli perbaikan elektronik. Analisa kerusakan berikut:
+
+PERANGKAT:
+- Jenis: ${deviceType}
+- Model: ${deviceModel}
+- Keluhan: ${problem}
+
+TUGAS: Berikan analisa dalam format JSON berikut (HANYA JSON, tanpa markdown):
+{
+  "cause": "Penyebab kerusakan dalam 1-2 kalimat",
+  "solution": "Solusi perbaikan yang direkomendasikan",
+  "parts": ["Komponen 1", "Komponen 2"],
+  "estimatedCost": 150000,
+  "estimatedTime": "1-3 hari",
+  "riskLevel": "Rendah/Sedang/Tinggi"
+}
+
+PENTING: Estimasi biaya dalam Rupiah, waktu realistis, dan komponen yang mungkin perlu diganti.
+`;
+
+      setAiLoading(true);
+      let aiResponse;
+
+      switch (aiProvider) {
+        case 'gemini':
+          aiResponse = await callGeminiAPI(prompt);
+          break;
+        case 'claude':
+          aiResponse = await callClaudeAPI(prompt);
+          break;
+        case 'deepseek':
+          aiResponse = await callDeepSeekAPI(prompt);
+          break;
+        default:
+          throw new Error('Invalid AI provider');
+      }
+
+      // Parse JSON response
+      const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        return parsed;
+      }
+
+      return fallbackDiagnostic;
+    } catch (error) {
+      console.error('AI Diagnostic Error:', error);
+      return fallbackDiagnostic;
+    } finally {
+      setAiLoading(false);
+    }
   };
 
   // Add Repair Function
-  const addRepair = (repairData) => {
-    const diagnostic = runAIDiagnostic(repairData.deviceType, repairData.problem);
+  const addRepair = async (repairData) => {
+    const diagnostic = await runAIDiagnostic(repairData.deviceType, repairData.deviceModel, repairData.problem);
     const newRepair = {
       id: Date.now(),
       ...repairData,
       status: 'pending',
       diagnostic,
+      aiProvider: useAI ? aiProvider : 'manual',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -105,58 +190,61 @@ const App = () => {
   const generatePDF = (repair) => {
     const doc = new jsPDF();
 
-    // Header
     doc.setFontSize(20);
     doc.text('iKaral AI Repair Pro', 20, 20);
     doc.setFontSize(12);
     doc.text('Invoice Perbaikan', 20, 30);
 
-    // Repair Details
     doc.setFontSize(10);
     doc.text(`ID: ${repair.id}`, 20, 45);
     doc.text(`Tanggal: ${new Date(repair.createdAt).toLocaleDateString('id-ID')}`, 20, 52);
     doc.text(`Status: ${repair.status.toUpperCase()}`, 20, 59);
+    doc.text(`AI: ${repair.aiProvider?.toUpperCase() || 'Manual'}`, 20, 66);
 
-    // Customer Info
     doc.setFontSize(12);
-    doc.text('Informasi Pelanggan:', 20, 75);
+    doc.text('Informasi Pelanggan:', 20, 80);
     doc.setFontSize(10);
-    doc.text(`Nama: ${repair.customerName}`, 20, 82);
-    doc.text(`Telepon: ${repair.customerPhone}`, 20, 89);
+    doc.text(`Nama: ${repair.customerName}`, 20, 87);
+    doc.text(`Telepon: ${repair.customerPhone}`, 20, 94);
 
-    // Device Info
     doc.setFontSize(12);
-    doc.text('Informasi Perangkat:', 20, 105);
+    doc.text('Informasi Perangkat:', 20, 108);
     doc.setFontSize(10);
-    doc.text(`Jenis: ${repair.deviceType}`, 20, 112);
-    doc.text(`Model: ${repair.deviceModel}`, 20, 119);
-    doc.text(`Keluhan: ${repair.problem}`, 20, 126);
+    doc.text(`Jenis: ${repair.deviceType}`, 20, 115);
+    doc.text(`Model: ${repair.deviceModel}`, 20, 122);
+    doc.text(`Keluhan: ${repair.problem}`, 20, 129);
 
-    // AI Diagnostic
     doc.setFontSize(12);
-    doc.text('Hasil AI Diagnostik:', 20, 142);
+    doc.text('Hasil Diagnostik:', 20, 143);
     doc.setFontSize(10);
-    doc.text(`Penyebab: ${repair.diagnostic.cause}`, 20, 149);
-    doc.text(`Solusi: ${repair.diagnostic.solution}`, 20, 156);
-    doc.text(`Estimasi Biaya: Rp ${repair.diagnostic.estimatedCost.toLocaleString('id-ID')}`, 20, 163);
-    doc.text(`Estimasi Waktu: ${repair.diagnostic.estimatedTime}`, 20, 170);
+    doc.text(`Penyebab: ${repair.diagnostic.cause}`, 20, 150);
+    doc.text(`Solusi: ${repair.diagnostic.solution}`, 20, 157);
+    doc.text(`Estimasi Biaya: Rp ${repair.diagnostic.estimatedCost.toLocaleString('id-ID')}`, 20, 164);
+    doc.text(`Estimasi Waktu: ${repair.diagnostic.estimatedTime}`, 20, 171);
+    doc.text(`Risiko: ${repair.diagnostic.riskLevel}`, 20, 178);
 
-    // Parts
     doc.setFontSize(12);
-    doc.text('Sparepart Diperlukan:', 20, 186);
+    doc.text('Sparepart Diperlukan:', 20, 192);
     doc.setFontSize(10);
     repair.diagnostic.parts.forEach((part, index) => {
-      doc.text(`${index + 1}. ${part}`, 20, 193 + (index * 7));
+      doc.text(`${index + 1}. ${part}`, 20, 199 + (index * 7));
     });
 
-    // Footer
     doc.setFontSize(8);
     doc.text('Terima kasih telah menggunakan layanan iKaral AI Repair Pro', 20, 280);
 
     doc.save(`invoice-${repair.id}.pdf`);
   };
 
-  // Filter repairs based on search
+  // Save Settings
+  const saveSettings = () => {
+    localStorage.setItem('ikaral_ai_provider', aiProvider);
+    localStorage.setItem('ikaral_api_keys', JSON.stringify(apiKeys));
+    localStorage.setItem('ikaral_use_ai', useAI.toString());
+    alert('Pengaturan berhasil disimpan!');
+  };
+
+  // Filter repairs
   const filteredRepairs = repairs.filter(r =>
     r.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
     r.deviceModel.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -174,7 +262,17 @@ const App = () => {
               <h1 className="text-2xl font-bold text-gray-900">iKaral AI Repair Pro</h1>
             </div>
             <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-500">AI-Powered Diagnostics</span>
+              {useAI && (
+                <span className="text-xs bg-green-100 text-green-800 px-3 py-1 rounded-full font-medium">
+                  AI: {aiProvider.toUpperCase()}
+                </span>
+              )}
+              <button
+                onClick={() => setActiveTab('settings')}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <Settings className="h-6 w-6 text-gray-600" />
+              </button>
             </div>
           </div>
         </div>
@@ -189,7 +287,7 @@ const App = () => {
               className={`py-4 px-1 border-b-2 font-medium text-sm ${
                 activeTab === 'dashboard'
                   ? 'border-indigo-500 text-indigo-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
               }`}
             >
               Dashboard
@@ -199,10 +297,20 @@ const App = () => {
               className={`py-4 px-1 border-b-2 font-medium text-sm ${
                 activeTab === 'repairs'
                   ? 'border-indigo-500 text-indigo-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
               }`}
             >
               Perbaikan
+            </button>
+            <button
+              onClick={() => setActiveTab('settings')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'settings'
+                  ? 'border-indigo-500 text-indigo-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Pengaturan AI
             </button>
           </nav>
         </div>
@@ -210,9 +318,9 @@ const App = () => {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
+        {/* Dashboard Tab */}
         {activeTab === 'dashboard' && (
           <div className="animate-fade-in">
-            {/* Stats Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
               <StatCard
                 title="Total Perbaikan"
@@ -240,7 +348,6 @@ const App = () => {
               />
             </div>
 
-            {/* Recent Repairs */}
             <div className="bg-white rounded-lg shadow-md p-6">
               <h2 className="text-xl font-semibold mb-4">Perbaikan Terbaru</h2>
               {repairs.length === 0 ? (
@@ -275,9 +382,9 @@ const App = () => {
           </div>
         )}
 
+        {/* Repairs Tab */}
         {activeTab === 'repairs' && (
           <div className="animate-fade-in">
-            {/* Search and Add Button */}
             <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
               <div className="relative w-full sm:w-96">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
@@ -286,7 +393,7 @@ const App = () => {
                   placeholder="Cari pelanggan, model, atau ID..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
               <button
@@ -298,11 +405,12 @@ const App = () => {
               </button>
             </div>
 
-            {/* Repairs List */}
             {showAddRepair && (
               <AddRepairForm
                 onAdd={addRepair}
                 onCancel={() => setShowAddRepair(false)}
+                aiLoading={aiLoading}
+                useAI={useAI}
               />
             )}
 
@@ -331,6 +439,184 @@ const App = () => {
                   />
                 ))
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Settings Tab */}
+        {activeTab === 'settings' && (
+          <div className="animate-fade-in max-w-3xl mx-auto">
+            <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+              <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                <Brain className="h-6 w-6 text-indigo-600" />
+                Pengaturan AI Diagnostik
+              </h2>
+
+              {/* AI Toggle */}
+              <div className="mb-6 p-4 bg-gray-50 rounded-lg">
+                <label className="flex items-center justify-between cursor-pointer">
+                  <div>
+                    <span className="font-medium text-gray-900">Aktifkan AI Diagnostik</span>
+                    <p className="text-sm text-gray-500">Gunakan AI untuk analisa otomatis</p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={useAI}
+                    onChange={(e) => setUseAI(e.target.checked)}
+                    className="w-12 h-6 rounded-full appearance-none bg-gray-300 checked:bg-indigo-600 relative cursor-pointer transition-colors"
+                  />
+                </label>
+              </div>
+
+              {useAI && (
+                <>
+                  {/* AI Provider Selection */}
+                  <div className="mb-6">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Pilih AI Provider
+                    </label>
+                    <div className="grid grid-cols-3 gap-4">
+                      <button
+                        onClick={() => setAiProvider('gemini')}
+                        className={`p-4 border-2 rounded-lg text-center transition ${
+                          aiProvider === 'gemini'
+                            ? 'border-indigo-500 bg-indigo-50'
+                            : 'border-gray-200 hover:border-gray-300'
+                        }`}
+                      >
+                        <div className="font-semibold">Google Gemini</div>
+                        <div className="text-xs text-gray-500">Fast & Free</div>
+                      </button>
+                      <button
+                        onClick={() => setAiProvider('claude')}
+                        className={`p-4 border-2 rounded-lg text-center transition ${
+                          aiProvider === 'claude'
+                            ? 'border-indigo-500 bg-indigo-50'
+                            : 'border-gray-200 hover:border-gray-300'
+                        }`}
+                      >
+                        <div className="font-semibold">Claude</div>
+                        <div className="text-xs text-gray-500">Advanced</div>
+                      </button>
+                      <button
+                        onClick={() => setAiProvider('deepseek')}
+                        className={`p-4 border-2 rounded-lg text-center transition ${
+                          aiProvider === 'deepseek'
+                            ? 'border-indigo-500 bg-indigo-50'
+                            : 'border-gray-200 hover:border-gray-300'
+                        }`}
+                      >
+                        <div className="font-semibold">DeepSeek</div>
+                        <div className="text-xs text-gray-500">Affordable</div>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* API Key Input */}
+                  <div className="space-y-4">
+                    {aiProvider === 'gemini' && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Google Gemini API Key
+                        </label>
+                        <input
+                          type="password"
+                          value={apiKeys.gemini}
+                          onChange={(e) => setApiKeys({ ...apiKeys, gemini: e.target.value })}
+                          placeholder="AIzaSy..."
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                        />
+                        <p className="mt-2 text-sm text-gray-500">
+                          Dapatkan gratis di:{' '}
+                          <a
+                            href="https://aistudio.google.com/app/apikey"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-indigo-600 underline"
+                          >
+                            Google AI Studio
+                          </a>
+                        </p>
+                      </div>
+                    )}
+
+                    {aiProvider === 'claude' && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Anthropic Claude API Key
+                        </label>
+                        <input
+                          type="password"
+                          value={apiKeys.claude}
+                          onChange={(e) => setApiKeys({ ...apiKeys, claude: e.target.value })}
+                          placeholder="sk-ant-..."
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                        />
+                        <p className="mt-2 text-sm text-gray-500">
+                          Dapatkan di:{' '}
+                          <a
+                            href="https://console.anthropic.com/"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-indigo-600 underline"
+                          >
+                            Anthropic Console
+                          </a>
+                        </p>
+                      </div>
+                    )}
+
+                    {aiProvider === 'deepseek' && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          DeepSeek API Key
+                        </label>
+                        <input
+                          type="password"
+                          value={apiKeys.deepseek}
+                          onChange={(e) => setApiKeys({ ...apiKeys, deepseek: e.target.value })}
+                          placeholder="sk-..."
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                        />
+                        <p className="mt-2 text-sm text-gray-500">
+                          Dapatkan di:{' '}
+                          <a
+                            href="https://platform.deepseek.com/"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-indigo-600 underline"
+                          >
+                            DeepSeek Platform
+                          </a>
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              <button
+                onClick={saveSettings}
+                className="mt-6 w-full bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 font-medium"
+              >
+                Simpan Pengaturan
+              </button>
+            </div>
+
+            {/* Info Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <h3 className="font-semibold text-blue-900 mb-2">Google Gemini</h3>
+                <p className="text-sm text-blue-700">Model terbaru, gratis, dan cepat untuk diagnosa umum</p>
+              </div>
+              <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                <h3 className="font-semibold text-purple-900 mb-2">Anthropic Claude</h3>
+                <p className="text-sm text-purple-700">Analisa mendalam dengan reasoning terbaik</p>
+              </div>
+              <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+                <h3 className="font-semibold text-orange-900 mb-2">DeepSeek</h3>
+                <p className="text-sm text-orange-700">Harga terjangkau dengan performa tinggi</p>
+              </div>
             </div>
           </div>
         )}
@@ -377,6 +663,11 @@ const RepairCard = ({ repair, onViewDetails, onUpdateStatus }) => {
             <span className={`px-3 py-1 rounded-full text-xs font-medium ${statusColors[repair.status]}`}>
               {statusLabels[repair.status]}
             </span>
+            {repair.aiProvider && repair.aiProvider !== 'manual' && (
+              <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs rounded">
+                AI: {repair.aiProvider.toUpperCase()}
+              </span>
+            )}
           </div>
           <div className="space-y-1 text-sm text-gray-600">
             <p><strong>ID:</strong> {repair.id}</p>
@@ -408,7 +699,7 @@ const RepairCard = ({ repair, onViewDetails, onUpdateStatus }) => {
 };
 
 // AddRepairForm Component
-const AddRepairForm = ({ onAdd, onCancel }) => {
+const AddRepairForm = ({ onAdd, onCancel, aiLoading, useAI }) => {
   const [formData, setFormData] = useState({
     customerName: '',
     customerPhone: '',
@@ -420,13 +711,6 @@ const AddRepairForm = ({ onAdd, onCancel }) => {
   const handleSubmit = (e) => {
     e.preventDefault();
     onAdd(formData);
-    setFormData({
-      customerName: '',
-      customerPhone: '',
-      deviceType: 'smartphone',
-      deviceModel: '',
-      problem: ''
-    });
   };
 
   return (
@@ -441,7 +725,7 @@ const AddRepairForm = ({ onAdd, onCancel }) => {
               required
               value={formData.customerName}
               onChange={(e) => setFormData({ ...formData, customerName: e.target.value })}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
             />
           </div>
           <div>
@@ -451,7 +735,7 @@ const AddRepairForm = ({ onAdd, onCancel }) => {
               required
               value={formData.customerPhone}
               onChange={(e) => setFormData({ ...formData, customerPhone: e.target.value })}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
             />
           </div>
           <div>
@@ -459,7 +743,7 @@ const AddRepairForm = ({ onAdd, onCancel }) => {
             <select
               value={formData.deviceType}
               onChange={(e) => setFormData({ ...formData, deviceType: e.target.value })}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
             >
               <option value="smartphone">Smartphone</option>
               <option value="laptop">Laptop</option>
@@ -473,7 +757,7 @@ const AddRepairForm = ({ onAdd, onCancel }) => {
               required
               value={formData.deviceModel}
               onChange={(e) => setFormData({ ...formData, deviceModel: e.target.value })}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
             />
           </div>
         </div>
@@ -484,16 +768,25 @@ const AddRepairForm = ({ onAdd, onCancel }) => {
             value={formData.problem}
             onChange={(e) => setFormData({ ...formData, problem: e.target.value })}
             rows="3"
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
             placeholder="Jelaskan masalah yang dialami..."
           />
         </div>
+        {useAI && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+            <p className="text-sm text-blue-800">
+              <Brain className="inline h-4 w-4 mr-1" />
+              AI akan menganalisa kerusakan secara otomatis
+            </p>
+          </div>
+        )}
         <div className="flex space-x-4">
           <button
             type="submit"
-            className="flex-1 bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700"
+            disabled={aiLoading}
+            className="flex-1 bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 disabled:opacity-50"
           >
-            Simpan & Diagnosa AI
+            {aiLoading ? 'Menganalisa dengan AI...' : 'Simpan & Diagnosa'}
           </button>
           <button
             type="button"
@@ -519,17 +812,23 @@ const RepairDetails = ({ repair, onClose, onUpdateStatus, onGeneratePDF }) => {
   return (
     <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
       <div className="flex justify-between items-start mb-6">
-        <h2 className="text-2xl font-bold text-gray-900">Detail Perbaikan #{repair.id}</h2>
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">Detail Perbaikan #{repair.id}</h2>
+          {repair.aiProvider && (
+            <span className="inline-block mt-2 px-3 py-1 bg-purple-100 text-purple-800 text-sm rounded-full">
+              Analisa oleh: {repair.aiProvider.toUpperCase()}
+            </span>
+          )}
+        </div>
         <button
           onClick={onClose}
-          className="text-gray-500 hover:text-gray-700"
+          className="text-gray-500 hover:text-gray-700 text-2xl"
         >
-          ✕
+          ×
         </button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Customer Info */}
         <div>
           <h3 className="text-lg font-semibold mb-3">Informasi Pelanggan</h3>
           <div className="space-y-2 text-sm">
@@ -540,7 +839,6 @@ const RepairDetails = ({ repair, onClose, onUpdateStatus, onGeneratePDF }) => {
           </div>
         </div>
 
-        {/* Device Info */}
         <div>
           <h3 className="text-lg font-semibold mb-3">Informasi Perangkat</h3>
           <div className="space-y-2 text-sm">
@@ -550,9 +848,8 @@ const RepairDetails = ({ repair, onClose, onUpdateStatus, onGeneratePDF }) => {
           </div>
         </div>
 
-        {/* AI Diagnostic */}
         <div className="md:col-span-2">
-          <h3 className="text-lg font-semibold mb-3">AI Diagnostik</h3>
+          <h3 className="text-lg font-semibold mb-3">Hasil Diagnostik</h3>
           <div className="bg-indigo-50 p-4 rounded-lg space-y-3">
             <div>
               <p className="text-sm font-medium text-indigo-900">Penyebab:</p>
@@ -562,7 +859,7 @@ const RepairDetails = ({ repair, onClose, onUpdateStatus, onGeneratePDF }) => {
               <p className="text-sm font-medium text-indigo-900">Solusi:</p>
               <p className="text-sm text-indigo-700">{repair.diagnostic.solution}</p>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-4">
               <div>
                 <p className="text-sm font-medium text-indigo-900">Estimasi Biaya:</p>
                 <p className="text-lg font-bold text-indigo-600">Rp {repair.diagnostic.estimatedCost.toLocaleString('id-ID')}</p>
@@ -570,6 +867,10 @@ const RepairDetails = ({ repair, onClose, onUpdateStatus, onGeneratePDF }) => {
               <div>
                 <p className="text-sm font-medium text-indigo-900">Estimasi Waktu:</p>
                 <p className="text-lg font-bold text-indigo-600">{repair.diagnostic.estimatedTime}</p>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-indigo-900">Tingkat Risiko:</p>
+                <p className="text-lg font-bold text-indigo-600">{repair.diagnostic.riskLevel}</p>
               </div>
             </div>
             <div>
@@ -584,7 +885,6 @@ const RepairDetails = ({ repair, onClose, onUpdateStatus, onGeneratePDF }) => {
         </div>
       </div>
 
-      {/* Actions */}
       <div className="mt-6 flex flex-wrap gap-3">
         <button
           onClick={() => onGeneratePDF(repair)}

@@ -29,23 +29,41 @@ Buka browser dan akses:
 - `http://IP_VPS_ANDA:8080`
 - Contoh: `http://103.123.45.67:8080`
 
-## 🔑 Setup Google Gemini API
+## 🔑 Setup AI (Pilih Salah Satu)
 
-1. Dapatkan API Key GRATIS di: https://aistudio.google.com/app/apikey
-2. Buka aplikasi → Menu **Settings (API)**
-3. Paste API Key Anda
-4. Klik **Simpan**
+Aplikasi mendukung **3 AI Provider**. Pilih sesuai kebutuhan:
 
-Selesai! AI sudah siap digunakan.
+### 🤖 Option 1: Google Gemini (Rekomendasi)
+- **Keunggulan:** GRATIS, Cepat, Mudah
+- **Cara:**
+  1. Dapatkan API Key di: https://aistudio.google.com/app/apikey
+  2. Buka aplikasi → **Pengaturan AI**
+  3. Aktifkan AI → Pilih **Gemini** → Paste API Key
+  4. Klik **Simpan Pengaturan**
+
+### 🧠 Option 2: Anthropic Claude
+- **Keunggulan:** Analisa mendalam, Reasoning terbaik
+- **Cara:**
+  1. Daftar di: https://console.anthropic.com/
+  2. Dapatkan $5 kredit gratis untuk percobaan
+  3. Pilih **Claude** di Pengaturan AI → Input API Key
+
+### 🔥 Option 3: DeepSeek
+- **Keunggulan:** Harga sangat murah, Performa tinggi
+- **Cara:**
+  1. Daftar di: https://platform.deepseek.com/
+  2. Top up mulai dari $1 (cukup untuk ribuan request)
+  3. Pilih **DeepSeek** di Pengaturan AI → Input API Key
 
 ## 📱 Fitur Utama
 
 - ✅ Dashboard manajemen perbaikan
-- 🤖 AI Diagnostik otomatis (Google Gemini)
-- 📄 Generate PDF Invoice
-- 🖨️ Print thermal receipt
+- 🤖 **AI Diagnostik Multi-Provider** (Gemini, Claude, DeepSeek)
+- 🔄 Switch AI provider on-the-fly
+- 📄 Generate PDF Invoice otomatis
 - 📊 Statistik real-time
-- 🔧 AI Training - customize logika AI sesuai bisnis Anda
+- 🔍 Search & filter data
+- 📱 Responsive design (mobile-friendly)
 
 ## 🛠️ Commands Berguna
 
